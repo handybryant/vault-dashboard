@@ -1,14 +1,68 @@
 """Hyperliquid Vault API client functions."""
 
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterable
 
-from config import API_URL, DEFAULT_TOP_N
+from config import API_URL, DEFAULT_TOP_N, VAULT_DEX, VAULT_DEX_FALLBACKS, STATS_VAULTS_URL
 
 # Known vault addresses as fallback when vaultSummaries returns empty
 KNOWN_VAULT_ADDRESSES = [
     "0xdfc24b077bc1425ad1dea75bcb6f8158e10df303",  # HLP - Hyperliquidity Provider
 ]
+
+
+def _post_info(payload: Dict[str, Any]) -> Any:
+    response = requests.post(API_URL, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def _extract_vault_list(data: Any) -> List[Dict[str, Any]]:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("vaultSummaries", "vaults", "data", "result"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+def _extract_stats_vaults(data: Any) -> List[Dict[str, Any]]:
+    if not isinstance(data, list):
+        return []
+    vaults = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary") or {}
+        vault_address = summary.get("vaultAddress")
+        if not vault_address:
+            continue
+        tvl_raw = summary.get("tvl")
+        try:
+            tvl = float(tvl_raw) if tvl_raw is not None else 0.0
+        except (TypeError, ValueError):
+            tvl = 0.0
+        vaults.append({
+            "name": summary.get("name", "Unknown"),
+            "leader": summary.get("leader", ""),
+            "vaultAddress": vault_address,
+            "tvl": tvl,
+            "pnls": item.get("pnls"),
+        })
+    return vaults
+
+
+def _iter_dex_candidates(primary: Optional[str], fallbacks: Iterable[str]) -> List[Optional[str]]:
+    candidates: List[Optional[str]] = []
+    if primary:
+        candidates.append(primary)
+    for dex in fallbacks:
+        if dex and dex not in candidates:
+            candidates.append(dex)
+    if not candidates:
+        candidates.append(None)
+    return candidates
 
 
 def get_all_vaults() -> List[Dict[str, Any]]:
@@ -17,9 +71,28 @@ def get_all_vaults() -> List[Dict[str, Any]]:
     Returns:
         List of vault summary dictionaries containing name, leader, tvl, etc.
     """
-    response = requests.post(API_URL, json={"type": "vaultSummaries"})
-    response.raise_for_status()
-    return response.json()
+    # Prefer the stats vaults feed (used by the UI) to avoid empty vaultSummaries.
+    try:
+        response = requests.get(STATS_VAULTS_URL, timeout=10)
+        response.raise_for_status()
+        vaults = _extract_stats_vaults(response.json())
+        if vaults:
+            return vaults
+    except requests.RequestException:
+        pass
+
+    for dex in _iter_dex_candidates(VAULT_DEX, VAULT_DEX_FALLBACKS):
+        payload = {"type": "vaultSummaries"}
+        if dex:
+            payload["dex"] = dex
+        try:
+            data = _post_info(payload)
+        except requests.RequestException:
+            continue
+        vaults = _extract_vault_list(data)
+        if vaults:
+            return vaults
+    return []
 
 
 def get_vault_details(vault_address: str) -> Optional[Dict[str, Any]]:
@@ -31,12 +104,15 @@ def get_vault_details(vault_address: str) -> Optional[Dict[str, Any]]:
     Returns:
         Vault details dictionary or None if not found.
     """
-    response = requests.post(
-        API_URL,
-        json={"type": "vaultDetails", "vaultAddress": vault_address}
-    )
-    response.raise_for_status()
-    return response.json()
+    for dex in _iter_dex_candidates(VAULT_DEX, VAULT_DEX_FALLBACKS):
+        payload = {"type": "vaultDetails", "vaultAddress": vault_address}
+        if dex:
+            payload["dex"] = dex
+        try:
+            return _post_info(payload)
+        except requests.RequestException:
+            continue
+    return None
 
 
 def extract_pnl(portfolio: List[List[Any]], period: str) -> Optional[float]:
@@ -72,6 +148,24 @@ def extract_pnl(portfolio: List[List[Any]], period: str) -> Optional[float]:
     if isinstance(last_entry, list) and len(last_entry) >= 2:
         return float(last_entry[1])
 
+    return None
+
+def extract_stats_pnl(pnls: Any, period: str) -> Optional[float]:
+    """Extract the latest PnL value from the stats vault list."""
+    if not isinstance(pnls, list):
+        return None
+    for item in pnls:
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+        if item[0] != period:
+            continue
+        series = item[1]
+        if not isinstance(series, list) or not series:
+            return None
+        try:
+            return float(series[-1])
+        except (TypeError, ValueError):
+            return None
     return None
 
 
@@ -148,6 +242,7 @@ def get_top_vaults_with_details(n: int = DEFAULT_TOP_N) -> List[Dict[str, Any]]:
         if not vault_address:
             continue
 
+        pnls = vault.get("pnls")
         # Check if we already have portfolio data (from fallback path)
         portfolio = vault.get("portfolio")
         leader_fraction = vault.get("leader_fraction")
@@ -158,9 +253,12 @@ def get_top_vaults_with_details(n: int = DEFAULT_TOP_N) -> List[Dict[str, Any]]:
                 leader_fraction = details.get("leaderFraction")
                 portfolio = details.get("portfolio")
 
-        # Extract PnL data from portfolio
-        month_pnl = extract_pnl(portfolio, "month")
-        alltime_pnl = extract_pnl(portfolio, "allTime")
+        # Extract PnL data from stats list if available, otherwise from portfolio.
+        month_pnl = extract_stats_pnl(pnls, "month") if pnls else None
+        alltime_pnl = extract_stats_pnl(pnls, "allTime") if pnls else None
+        if month_pnl is None or alltime_pnl is None:
+            month_pnl = month_pnl if month_pnl is not None else extract_pnl(portfolio, "month")
+            alltime_pnl = alltime_pnl if alltime_pnl is not None else extract_pnl(portfolio, "allTime")
 
         enriched_vaults.append({
             "name": vault.get("name", "Unknown"),

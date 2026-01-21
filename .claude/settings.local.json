@@ -14,7 +14,8 @@
       "WebFetch(domain:app.hyperliquid.xyz)",
       "Bash(curl:*)",
       "WebFetch(domain:deepnote.com)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

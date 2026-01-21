@@ -33,13 +33,11 @@ def format_percentage(value: float | None) -> str:
     return f"{value * 100:.2f}%"
 
 
-def format_pnl(value: float | None) -> str:
-    """Format PnL with color indicator."""
+def format_pnl(value: float | None) -> float | None:
+    """Format PnL as a plain number for reliable sorting."""
     if value is None:
-        return "N/A"
-    formatted = format_currency(value)
-    return formatted
-
+        return None
+    return round(value, 2)
 
 def main():
     st.set_page_config(
@@ -52,6 +50,9 @@ def main():
 
     # Add a placeholder for the last update time
     status_placeholder = st.empty()
+
+    if st.button("Refresh now"):
+        st.rerun()
 
     # Fetch data
     with st.spinner("Fetching vault data..."):
@@ -84,18 +85,27 @@ def main():
         display_df = pd.DataFrame({
             "Vault Name": df["name"],
             "Leader Address": df["leader"].apply(truncate_address),
-            "TVL": df["tvl"].apply(format_currency),
+            "TVL": df["tvl"],
             "Leader %": df["leader_fraction"].apply(format_percentage),
             "30d PnL": df["month_pnl"].apply(format_pnl),
             "All-time PnL": df["alltime_pnl"].apply(format_pnl),
         })
 
         # Display the table
+        display_df["TVL"] = pd.to_numeric(display_df["TVL"], errors="coerce")
+        display_df["30d PnL"] = pd.to_numeric(display_df["30d PnL"], errors="coerce")
+        display_df["All-time PnL"] = pd.to_numeric(display_df["All-time PnL"], errors="coerce")
+
         st.dataframe(
             display_df,
             use_container_width=True,
             hide_index=True,
             height=750,
+            column_config={
+                "TVL": st.column_config.NumberColumn(format="localized", step=0.01),
+                "30d PnL": st.column_config.NumberColumn(format="localized", step=0.01),
+                "All-time PnL": st.column_config.NumberColumn(format="localized", step=0.01),
+            },
         )
 
     # Auto-refresh
