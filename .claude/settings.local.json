@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s \"C:\\\\Users\\\\cfma\\\\projects\\\\vault-dashboard\")",
+      "Bash(ls:*)",
+      "WebFetch(domain:hyperliquid.gitbook.io)",
+      "WebSearch",
+      "WebFetch(domain:docs.chainstack.com)",
+      "WebFetch(domain:www.quicknode.com)",
+      "Bash(python -m venv:*)",
+      "Bash(C:Userscfmavenvhl-vault-envScriptspip.exe install -r C:Userscfmaprojectsvault-dashboardrequirements.txt)",
+      "Bash(/c/Users/cfma/venv/hl-vault-env/Scripts/pip.exe install:*)",
+      "Bash(/c/Users/cfma/venv/hl-vault-env/Scripts/python.exe:*)",
+      "WebFetch(domain:app.hyperliquid.xyz)",
+      "Bash(curl:*)",
+      "WebFetch(domain:deepnote.com)",
+      "Bash(python:*)"
+    ]
+  }
+}
