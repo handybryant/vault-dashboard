@@ -12,6 +12,18 @@ from vault_api import get_top_vaults_with_details, get_all_vaults
 from metrics import format_ratio, format_drawdown
 
 
+@st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)
+def fetch_all_vaults() -> List[Dict[str, Any]]:
+    """Cached wrapper for get_all_vaults."""
+    return get_all_vaults()
+
+
+@st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)
+def fetch_top_vaults_with_details(n: int) -> List[Dict[str, Any]]:
+    """Cached wrapper for get_top_vaults_with_details."""
+    return get_top_vaults_with_details(n)
+
+
 def truncate_address(address: str) -> str:
     """Truncate address to 0x1234...abcd format."""
     if not address or len(address) < 10:
@@ -48,20 +60,20 @@ def create_vault_csv(vault: Dict[str, Any]) -> str:
     """Create CSV content for a single vault's daily returns."""
     daily_returns = vault.get("daily_returns", [])
 
-    lines = ["date,period_return,cumulative_return,timestamp"]
+    lines = ["date,period_return,cumulative_return"]
 
     cumulative = 0.0
     for ts, ret in daily_returns:
         cumulative += ret
-        date_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-        lines.append(f"{date_str},{ret:.8f},{cumulative:.8f},{ts}")
+        date_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+        lines.append(f"{date_str},{ret:.8f},{cumulative:.8f}")
 
     return "\n".join(lines)
 
 
 def create_bulk_csv(vaults: List[Dict[str, Any]]) -> str:
     """Create CSV content for all vaults' returns."""
-    lines = ["vault_name,vault_address,date,period_return,cumulative_return,timestamp"]
+    lines = ["vault_name,vault_address,date,period_return,cumulative_return"]
 
     for vault in vaults:
         name = vault.get("name", "Unknown").replace(",", " ")
@@ -71,8 +83,8 @@ def create_bulk_csv(vaults: List[Dict[str, Any]]) -> str:
         cumulative = 0.0
         for ts, ret in daily_returns:
             cumulative += ret
-            date_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-            lines.append(f"{name},{address},{date_str},{ret:.8f},{cumulative:.8f},{ts}")
+            date_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+            lines.append(f"{name},{address},{date_str},{ret:.8f},{cumulative:.8f}")
 
     return "\n".join(lines)
 
@@ -97,28 +109,28 @@ def main():
     col1, col2 = st.columns([1, 5])
     with col1:
         if st.button("Refresh now"):
+            # Clear cache and refetch
+            fetch_all_vaults.clear()
+            fetch_top_vaults_with_details.clear()
             st.rerun()
 
-    # Fetch data
-    with st.spinner("Fetching vault data..."):
-        try:
-            # Check if vaultSummaries API returns data
-            all_vaults = get_all_vaults()
-            using_fallback = len(all_vaults) == 0
+    # Fetch data (cached)
+    try:
+        # Check if vaultSummaries API returns data
+        all_vaults = fetch_all_vaults()
+        using_fallback = len(all_vaults) == 0
 
-            vaults = get_top_vaults_with_details(DEFAULT_TOP_N)
+        vaults = fetch_top_vaults_with_details(DEFAULT_TOP_N)
 
-            if using_fallback:
-                st.info("Note: vaultSummaries API returned empty. Showing known vaults only (HLP).")
+        if using_fallback:
+            st.info("Note: vaultSummaries API returned empty. Showing known vaults only (HLP).")
 
-            status_placeholder.success(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S')} - Showing {len(vaults)} vault(s)")
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
-            time.sleep(REFRESH_INTERVAL_SECONDS)
-            st.rerun()
-            return
+        status_placeholder.success(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S')} - Showing {len(vaults)} vault(s)")
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return
 
-    st.caption(f"Auto-refreshes every {REFRESH_INTERVAL_SECONDS} seconds")
+    st.caption(f"Data cached for {REFRESH_INTERVAL_SECONDS} seconds. Click 'Refresh now' to update.")
 
     if not vaults:
         st.warning("No vault data available.")
@@ -170,44 +182,46 @@ def main():
             },
         )
 
-        # Per-vault download section
-        st.subheader("Individual Vault Downloads")
-        st.caption("Download daily returns data for specific vaults")
+        # Per-vault actions section
+        st.subheader("Individual Vault Actions")
+        st.caption("View charts or download returns data for specific vaults")
 
-        # Create columns for download buttons (4 per row)
-        cols_per_row = 4
-        for i in range(0, len(vaults), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for j, col in enumerate(cols):
-                idx = i + j
-                if idx < len(vaults):
-                    vault = vaults[idx]
-                    vault_name = vault.get("name", "Unknown")
-                    daily_returns = vault.get("daily_returns", [])
+        # Store vaults in session state for the detail page
+        st.session_state["all_vaults"] = vaults
 
-                    with col:
-                        if daily_returns:
-                            csv_data = create_vault_csv(vault)
-                            filename = f"{sanitize_filename(vault_name)}_returns.csv"
-                            st.download_button(
-                                label=f"{vault_name[:20]}...",
-                                data=csv_data,
-                                file_name=filename,
-                                mime="text/csv",
-                                key=f"download_{idx}",
-                                help=f"Download daily returns for {vault_name}"
-                            )
-                        else:
-                            st.button(
-                                f"{vault_name[:20]}...",
-                                disabled=True,
-                                key=f"no_data_{idx}",
-                                help="No return data available"
-                            )
+        # Create rows with vault name, chart button, and download button
+        for idx, vault in enumerate(vaults):
+            vault_name = vault.get("name", "Unknown")
+            daily_returns = vault.get("daily_returns", [])
+            weekly_returns = vault.get("weekly_returns", [])
 
-    # Auto-refresh
-    time.sleep(REFRESH_INTERVAL_SECONDS)
-    st.rerun()
+            col_name, col_chart, col_download = st.columns([3, 1, 1])
+
+            with col_name:
+                st.write(vault_name)
+
+            with col_chart:
+                if weekly_returns:
+                    if st.button("📈 Chart", key=f"chart_{idx}", help=f"View cumulative returns chart for {vault_name}"):
+                        st.session_state["selected_vault"] = vault
+                        st.switch_page("pages/vault_detail.py")
+                else:
+                    st.button("📈 Chart", key=f"no_chart_{idx}", disabled=True, help="No chart data available")
+
+            with col_download:
+                if daily_returns:
+                    csv_data = create_vault_csv(vault)
+                    filename = f"{sanitize_filename(vault_name)}_returns.csv"
+                    st.download_button(
+                        label="⬇ CSV",
+                        data=csv_data,
+                        file_name=filename,
+                        mime="text/csv",
+                        key=f"download_{idx}",
+                        help=f"Download daily returns for {vault_name}"
+                    )
+                else:
+                    st.button("⬇ CSV", key=f"no_download_{idx}", disabled=True, help="No return data available")
 
 
 if __name__ == "__main__":
