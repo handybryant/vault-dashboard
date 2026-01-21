@@ -4,6 +4,7 @@ import requests
 from typing import List, Dict, Any, Optional, Iterable
 
 from config import API_URL, DEFAULT_TOP_N, VAULT_DEX, VAULT_DEX_FALLBACKS, STATS_VAULTS_URL
+from metrics import get_vault_metrics
 
 # Known vault addresses as fallback when vaultSummaries returns empty
 KNOWN_VAULT_ADDRESSES = [
@@ -260,13 +261,23 @@ def get_top_vaults_with_details(n: int = DEFAULT_TOP_N) -> List[Dict[str, Any]]:
             month_pnl = month_pnl if month_pnl is not None else extract_pnl(portfolio, "month")
             alltime_pnl = alltime_pnl if alltime_pnl is not None else extract_pnl(portfolio, "allTime")
 
+        # Calculate custom metrics from portfolio data
+        metrics = get_vault_metrics(portfolio) if portfolio else {}
+
         enriched_vaults.append({
             "name": vault.get("name", "Unknown"),
+            "vaultAddress": vault_address,
             "leader": vault.get("leader", ""),
             "tvl": float(vault.get("tvl", 0)),
             "leader_fraction": float(leader_fraction) if leader_fraction else None,
             "month_pnl": month_pnl,
             "alltime_pnl": alltime_pnl,
+            "rv_30d": metrics.get("rv_30d"),
+            "rv_1y": metrics.get("rv_1y"),
+            "rv_alltime": metrics.get("rv_alltime"),
+            "max_drawdown": metrics.get("max_drawdown"),
+            "daily_returns": metrics.get("daily_returns", []),
+            "weekly_returns": metrics.get("weekly_returns", []),
         })
 
     return enriched_vaults

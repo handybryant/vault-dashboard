@@ -15,7 +15,9 @@
       "Bash(curl:*)",
       "WebFetch(domain:deepnote.com)",
       "Bash(python:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git -C /c/Users/cfma/projects/vault-dashboard init)",
+      "Bash(git -C /c/Users/cfma/projects/vault-dashboard status)"
     ]
   }
 }
